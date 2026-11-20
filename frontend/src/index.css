@@ -1,0 +1,107 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    background-color: #171719;
+    color: #171719;
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .hero-overlay {
+    background:
+      linear-gradient(90deg, rgba(8, 9, 10, 0.78) 0%, rgba(8, 9, 10, 0.18) 58%, rgba(8, 9, 10, 0.08) 100%),
+      linear-gradient(0deg, rgba(8, 9, 10, 0.72) 0%, transparent 48%);
+  }
+
+  .detail-overlay {
+    background:
+      linear-gradient(90deg, rgba(10, 10, 11, 0.82) 0%, rgba(10, 10, 11, 0.18) 70%),
+      linear-gradient(0deg, rgba(10, 10, 11, 0.82) 0%, transparent 55%);
+  }
+
+  .model-card-gradient {
+    background: linear-gradient(0deg, rgba(12, 13, 14, 0.78), transparent);
+  }
+
+  .nav-link {
+    position: relative;
+    transition: color 180ms ease;
+  }
+
+  .nav-link::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 100%;
+    bottom: -8px;
+    height: 1px;
+    background: white;
+    transition: right 180ms ease;
+  }
+
+  .nav-link:hover::after {
+    right: 0;
+  }
+}
+
+@layer components {
+  /* Chamfered amber button */
+  .btn-amber {
+    @apply inline-flex items-center gap-2 bg-amber font-bold text-black uppercase tracking-widest text-xs px-5 py-3 transition-all duration-200 hover:bg-amber-hover;
+    clip-path: polygon(8px 0%, 100% 0%, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0% 100%, 0% 8px);
+  }
+
+  /* Dark outline button */
+  .btn-outline {
+    @apply inline-flex items-center gap-2 border border-zinc-600 text-white font-bold uppercase tracking-widest text-xs px-5 py-3 transition-all duration-200 hover:border-amber hover:text-amber;
+    clip-path: polygon(8px 0%, 100% 0%, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0% 100%, 0% 8px);
+  }
+
+  /* Section label (orange small-caps) */
+  .section-label {
+    @apply text-orange-label text-xs font-bold uppercase tracking-[0.2em] font-mono;
+  }
+
+  /* RAG badge (green monospace) */
+  .rag-badge {
+    @apply text-green-rag text-xs font-mono font-semibold;
+  }
+
+  /* Card surface */
+  .card {
+    @apply bg-surface border border-border;
+  }
+
+  /* Amber text */
+  .text-amber-accent {
+    color: #f59e0b;
+  }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: #0b0e14;
+}
+::-webkit-scrollbar-thumb {
+  background: #1e2435;
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #f59e0b;
+}
