@@ -125,8 +125,8 @@ BEGIN
 END;
 $$;
 
--- Backend access uses the Supabase service_role key. Keep these tables closed
--- to browser-facing anon/authenticated roles; service_role bypasses RLS.
+-- Keep Supabase browser roles closed while allowing the Supabase service role.
+-- Role-specific grants are conditional so this schema also works on standalone PostgreSQL.
 ALTER TABLE public.documents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.vehicles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.vehicle_variants ENABLE ROW LEVEL SECURITY;
@@ -134,25 +134,23 @@ ALTER TABLE public.document_chunks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.chat_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.chat_messages ENABLE ROW LEVEL SECURITY;
 
-REVOKE ALL ON TABLE
-    public.documents,
-    public.vehicles,
-    public.vehicle_variants,
-    public.document_chunks,
-    public.chat_sessions,
-    public.chat_messages
-FROM anon, authenticated;
-GRANT USAGE ON SCHEMA public TO service_role;
-GRANT ALL PRIVILEGES ON TABLE
-    public.documents,
-    public.vehicles,
-    public.vehicle_variants,
-    public.document_chunks,
-    public.chat_sessions,
-    public.chat_messages
-TO service_role;
-
-REVOKE ALL ON FUNCTION public.match_document_chunks(VECTOR, FLOAT, INT, UUID)
-FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.match_document_chunks(VECTOR, FLOAT, INT, UUID)
-TO service_role;
+DO $$
+DECLARE
+    app_tables TEXT := 'public.documents, public.vehicles, public.vehicle_variants, public.document_chunks, public.chat_sessions, public.chat_messages';
+    match_function TEXT := 'public.match_document_chunks(VECTOR, FLOAT, INT, UUID)';
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+        EXECUTE 'REVOKE ALL ON TABLE ' || app_tables || ' FROM anon';
+        EXECUTE 'REVOKE ALL ON FUNCTION ' || match_function || ' FROM anon';
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+        EXECUTE 'REVOKE ALL ON TABLE ' || app_tables || ' FROM authenticated';
+        EXECUTE 'REVOKE ALL ON FUNCTION ' || match_function || ' FROM authenticated';
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+        EXECUTE 'GRANT USAGE ON SCHEMA public TO service_role';
+        EXECUTE 'GRANT ALL PRIVILEGES ON TABLE ' || app_tables || ' TO service_role';
+        EXECUTE 'GRANT EXECUTE ON FUNCTION ' || match_function || ' TO service_role';
+    END IF;
+END;
+$$;

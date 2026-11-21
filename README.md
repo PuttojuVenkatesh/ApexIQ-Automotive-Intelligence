@@ -1,6 +1,6 @@
 # ApexIQ-Automotive-Intelligence
 
-A full-stack AI-powered technical assistant and document management platform for automotive brochures, specs, and comparisons. Built with a **FastAPI Python backend**, **Supabase (PostgreSQL + pgvector)**, intelligent PDF processing, and a multi-provider RAG pipeline.
+A full-stack AI-powered technical assistant and document management platform for automotive brochures, specs, and comparisons. Built with a **FastAPI Python backend**, **PostgreSQL + pgvector** (Supabase or direct PostgreSQL connection), intelligent PDF processing, and a multi-provider RAG pipeline.
 
 ---
 
@@ -19,35 +19,46 @@ A full-stack AI-powered technical assistant and document management platform for
 │   │   ├── core/
 │   │   │   └── config.py                    # App configuration & settings
 │   │   ├── db/
-│   │   │   └── supabase_client.py           # Supabase client + local fallback
+│   │   │   ├── supabase_client.py           # Supabase client + local fallback
+│   │   │   └── postgres_client.py           # Direct PostgreSQL storage
 │   │   ├── services/
 │   │   │   ├── pdf_extractor.py             # PDF text, table & metadata extractor
 │   │   │   ├── chunker.py                   # Semantic chunking with page metadata
 │   │   │   ├── embeddings.py                # Vector embeddings (OpenAI / Gemini / Mock)
-│   │   │   ├── rag_service.py               # RAG pipeline with source references
+│   │   │   ├── rag_service.py               # Cross-brochure RAG and cited comparisons
 │   │   │   └── comparison_service.py        # Technical side-by-side comparison engine
 │   │   └── main.py                          # FastAPI server entrypoint
-│   ├── schema.sql                           # Supabase PostgreSQL + pgvector schema
+│   ├── schema.sql                           # PostgreSQL + pgvector schema
 │   ├── requirements.txt                     # Backend Python dependencies
 │   ├── .env.example                         # Environment configuration template
-│   └── test_pipeline.py                     # End-to-end automated test script
+│   └── test_*.py                            # Backend regression tests
+├── frontend/
+│   ├── src/
+│   │   └── services/api.js                  # Frontend API client
+│   ├── package.json                         # Vite/React dependencies and scripts
+│   └── .env.example                         # Frontend API URL template
 └── README.md
 ```
 
 ---
 
-## 🗄️ Database Setup (Supabase + pgvector)
+## 🗄️ Database Setup (PostgreSQL + pgvector)
 
-1. Create/open a project in the **Supabase Dashboard**, then open **SQL Editor**.
-2. Open [`backend/schema.sql`](backend/schema.sql), paste the entire script into a new SQL query, and run it. It creates the `pgvector` extension, tables and cosine-search function, enables row-level security, and grants database access only to the backend `service_role`.
-3. In **Project Settings → API Keys**, copy the project URL and the server-side `service_role`/secret key. Never put this secret in frontend code or a `VITE_*` variable.
-4. Put them in the ignored local file `backend/.env`:
+1. Connect to your PostgreSQL database using the same role the backend will use, then run [`backend/schema.sql`](backend/schema.sql). It creates the `pgvector` extension, application tables, and cosine-search function. The database server must have pgvector available, and that role must have permission to create extensions/tables.
+2. Configure **one** database connection in the ignored local file `backend/.env`:
+
+   For a direct PostgreSQL connection:
+   ```ini
+   DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/DATABASE?sslmode=require
+   ```
+
+   For the Supabase REST API instead:
    ```ini
    SUPABASE_URL=https://YOUR_PROJECT_ID.supabase.co
    SUPABASE_KEY=YOUR_SERVER_SIDE_SERVICE_ROLE_SECRET
    ```
-   Keep the existing LLM settings in that file. Do not commit it.
-5. Restart the backend. Open `http://127.0.0.1:8000/`; `storage_backend` must say `supabase`. If it says `local_fallback`, check the URL/key, network access, and that the schema script completed successfully.
+   `DATABASE_URL` takes precedence when both configurations are present. Keep database credentials out of frontend variables and source control. URL-encode reserved characters in a connection-string password.
+3. Keep the existing LLM settings in `backend/.env` and restart the backend. Open `http://127.0.0.1:8000/`; `storage_backend` should report `postgresql` or `supabase`, as configured.
 
 The schema creates:
 - `documents` for brochure metadata and processing status
@@ -58,13 +69,13 @@ The schema creates:
 
 ### Put brochures into the database
 
-The checked-in `backend/data/vector_cache.json` is only a local retrieval cache; it is not automatically copied to Supabase. After configuring Supabase and confirming `storage_backend: supabase`, run this from the project root to populate it from the PDFs in `brochures\`:
+If present, `backend/data/vector_cache.json` is only a local retrieval cache; it is not automatically copied to Supabase. After configuring Supabase and confirming `storage_backend: supabase`, run this from the project root to populate it from the PDFs in `brochures\`:
 
 ```powershell
 python backend\ingest.py
 ```
 
-This inserts each PDF's document row, vehicle row, chunks, and embeddings into Supabase, and skips filenames already indexed there. For subsequent brochures, use the Admin page to upload each PDF; the background indexing pipeline writes its extracted records to the database. Using the Admin page to delete a brochure also removes its related database rows.
+This inserts each PDF's document row, vehicle row, chunks, and embeddings into the configured PostgreSQL database, and skips filenames already indexed there. For subsequent brochures, use the Admin page to upload each PDF; the background indexing pipeline writes its extracted records to the database. Using the Admin page to delete a brochure also removes its related database rows.
 
 PDF binary files themselves remain on the backend machine (`brochures\` or `backend\uploads\`). PostgreSQL stores the document record and local `file_path`, not the PDF bytes; Supabase Storage is not configured for PDF binaries.
 
@@ -98,7 +109,7 @@ Each GearGuide conversation creates a session and stores its user/assistant mess
 
 ### Local fallback
 
-When the backend root endpoint reports `storage_backend: local_fallback`, requests are not being stored in Supabase. The four bundled vehicles and their 104 brochure chunks are loaded from `backend/data/vector_cache.json`; data created while disconnected may be in `backend/uploads/local_store.json`. Local fallback chat history is held in memory and is lost on backend restart. Configure Supabase and re-ingest the brochure PDFs to persist and retrieve this data from PostgreSQL.
+When the backend root endpoint reports `storage_backend: local_fallback`, requests are not being stored in PostgreSQL. The backend uses `backend/data/vector_cache.json` when that local cache exists; data created while disconnected may be in `backend/uploads/local_store.json`. Local fallback chat history is held in memory and is lost on backend restart. Configure Supabase and ingest the brochure PDFs to persist and retrieve data from PostgreSQL.
 
 ---
 
@@ -124,6 +135,59 @@ When the backend root endpoint reports `storage_backend: local_fallback`, reques
    ```
 4. View interactive Swagger API documentation at:
    `http://localhost:8000/docs`
+
+---
+
+## 🚀 Deploy with Render and Vercel
+
+Deploy the FastAPI backend to Render and the Vite frontend to Vercel. The frontend
+uses `VITE_API_BASE_URL` to reach the backend; the Supabase and LLM credentials
+must remain server-side in Render.
+
+### Render backend
+
+1. Push the repository to GitHub and create a **Web Service** in Render from it.
+2. Set **Root Directory** to `backend`.
+3. Use these commands:
+
+   ```text
+   Build: pip install -r requirements.txt
+   Start: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+   ```
+
+4. Add these environment variables in Render:
+   - `SUPABASE_URL` and `SUPABASE_KEY` for the existing Supabase project. Use
+     the server-side service-role key; do not put it in Vercel.
+   - `LLM_PROVIDER=gemini` and `GEMINI_API_KEY`, or configure the OpenAI
+     provider and `OPENAI_API_KEY`.
+   - `ADMIN_USERNAME` and a strong `ADMIN_PASSWORD`.
+   - `CORS_ORIGINS` with the Vercel site origin, for example
+     `https://your-project.vercel.app`. Add multiple origins as a
+     comma-separated list if needed.
+5. After deployment, check the service root (`/`). It should report
+   `storage_backend` as `supabase` (or `postgresql` if `DATABASE_URL` is used),
+   not `local_fallback`. `/api/vehicles` and `/docs` are useful smoke checks.
+
+### Vercel frontend
+
+1. Import the same GitHub repository as a Vercel project.
+2. Set **Root Directory** to `frontend`; use `npm run build` and output directory
+   `dist` (Vercel usually detects these for Vite).
+3. Set the Vercel environment variable:
+
+   ```text
+   VITE_API_BASE_URL=https://your-render-service.onrender.com
+   ```
+
+   Use the actual Render service URL, without a trailing slash. Redeploy after
+   changing this variable because Vite embeds it during the build.
+
+The existing brochure metadata, chunks, and embeddings are already in Supabase,
+so chat retrieval can use those records after deployment without running the
+schema or ingestion again. PDF files themselves are not stored in Supabase
+Storage; Render's local filesystem is not a durable location for uploaded
+brochures. Configure persistent/object storage before relying on brochure
+uploads or PDF downloads across service restarts.
 
 ---
 

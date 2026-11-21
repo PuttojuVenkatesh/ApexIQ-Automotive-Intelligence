@@ -61,6 +61,31 @@ class SupabaseConnectionTests(unittest.TestCase):
         create_client.assert_not_called()
         self.assertFalse(manager.is_connected)
 
+    def test_connected_document_list_uses_database_rows_only(self):
+        manager = self.create_manager()
+        manager.is_connected = True
+        manager.local_documents = {"cached": {"id": "cached", "filename": "old.pdf"}}
+        database_documents = [{"id": "db", "filename": "new.pdf"}]
+        manager.client = Mock()
+        manager.client.table.return_value.select.return_value.order.return_value.execute.return_value.data = (
+            database_documents
+        )
+
+        self.assertEqual(manager.get_documents(), database_documents)
+
+    def test_connected_vehicle_list_does_not_duplicate_local_cache_rows(self):
+        manager = self.create_manager()
+        manager.is_connected = True
+        manager.local_vehicles = {"cached": {"id": "cached", "model": "Creta"}}
+        manager.local_variants = []
+        database_vehicles = [{"id": "db", "model": "Creta", "vehicle_variants": []}]
+        manager.client = Mock()
+        manager.client.table.return_value.select.return_value.execute.return_value.data = (
+            database_vehicles
+        )
+
+        self.assertEqual(manager.get_vehicles(), database_vehicles)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -166,8 +166,7 @@ class SupabaseManager:
         if self.is_connected:
             try:
                 response = self.client.table("documents").select("*").eq("id", doc_id).limit(1).execute()
-                if response.data:
-                    return response.data[0]
+                return response.data[0] if response.data else None
             except Exception as e:
                 print(f"[Supabase] get_document failed: {e}")
         return self.local_documents.get(doc_id)
@@ -211,11 +210,7 @@ class SupabaseManager:
         if self.is_connected:
             try:
                 res = self.client.table("documents").select("*").order("created_at", desc=True).execute()
-                remote_documents = res.data or []
-                if remote_documents:
-                    documents_by_id = {doc["id"]: doc for doc in self.local_documents.values()}
-                    documents_by_id.update({doc["id"]: doc for doc in remote_documents})
-                    return list(documents_by_id.values())
+                return res.data or []
             except Exception as e:
                 print(f"[Supabase] get_documents failed: {e}")
                 
@@ -272,11 +267,7 @@ class SupabaseManager:
         if self.is_connected:
             try:
                 res = self.client.table("vehicles").select("*, vehicle_variants(*)").execute()
-                remote_vehicles = res.data or []
-                if remote_vehicles:
-                    vehicles_by_id = {vehicle["id"]: vehicle for vehicle in self.local_vehicles.values()}
-                    vehicles_by_id.update({vehicle["id"]: vehicle for vehicle in remote_vehicles})
-                    return list(vehicles_by_id.values())
+                return res.data or []
             except Exception as e:
                 print(f"[Supabase] get_vehicles failed: {e}")
                 
@@ -414,4 +405,9 @@ class SupabaseManager:
                 
         return self.local_chat_sessions.get(session_id, [])
 
-db = SupabaseManager()
+if settings.DATABASE_URL:
+    from app.db.postgres_client import PostgresManager
+
+    db = PostgresManager()
+else:
+    db = SupabaseManager()

@@ -29,7 +29,7 @@ def ingest_all_brochures(save_cache: bool = True):
     pdf_files = sorted(list(brochures_dir.glob("*.pdf")))
     print(f"\nDiscovered {len(pdf_files)} brochures in {brochures_dir}:")
     for f in pdf_files:
-        print(f"  • {f.name} ({f.stat().st_size / (1024*1024):.2f} MB)")
+        print(f"  - {f.name} ({f.stat().st_size / (1024*1024):.2f} MB)")
 
     if not pdf_files:
         print("ERROR: No brochures found. Please add PDF brochures into the brochures folder.")
@@ -105,7 +105,7 @@ def ingest_all_brochures(save_cache: bool = True):
         existing_indexed_filenames.add(pdf_path.name)
         total_chunks_indexed += len(chunks)
         all_indexed_chunks.extend(chunks)
-        print(f"    ✓ Successfully indexed into vector store.")
+        print("    [OK] Successfully indexed into vector store.")
 
     elapsed = time.time() - start_time
     print("\n" + "=" * 70)

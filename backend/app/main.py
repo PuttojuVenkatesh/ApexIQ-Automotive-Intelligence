@@ -13,7 +13,7 @@ app = FastAPI(
 # Enable CORS for React frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -30,7 +30,11 @@ def root():
     return {
         "status": "online",
         "service": settings.APP_NAME,
-        "storage_backend": "supabase" if db.is_connected else "local_fallback",
+        "storage_backend": (
+            "postgresql"
+            if settings.DATABASE_URL
+            else "supabase" if db.is_connected else "local_fallback"
+        ),
         "docs_url": "/docs",
         "llm_provider": settings.LLM_PROVIDER,
         "embedding_dimension": settings.EMBEDDING_DIMENSION

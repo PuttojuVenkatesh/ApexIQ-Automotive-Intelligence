@@ -97,6 +97,86 @@ class BrochureGroundedRecommendationTests(unittest.TestCase):
         self.assertIn("1.5l MPi petrol", answer)
         self.assertNotIn("seamlessly blends", answer)
 
+    def test_comparison_uses_feature_evidence_for_unlisted_brochure_models(self):
+        chunks = [
+            {
+                "metadata": {"brand": "Brand A", "model": "Alpha", "page": 2, "section": "Safety"},
+                "content": "Six airbags and electronic stability control are provided.",
+            },
+            {
+                "metadata": {"brand": "Brand B", "model": "Beta", "page": 4, "section": "Technology"},
+                "content": "The cabin has a 12-inch touchscreen with wireless phone connectivity.",
+            },
+        ]
+
+        answer = RAGService._compare_from_brochures(
+            "Compare Alpha and Beta in terms of features",
+            chunks,
+        )
+
+        self.assertIn("Brand A Alpha", answer)
+        self.assertIn("six airbags", answer.lower())
+        self.assertIn("Brand B Beta", answer)
+        self.assertIn("12-inch touchscreen", answer)
+
+    def test_all_brochure_comparison_includes_every_retrieved_model(self):
+        chunks = [
+            {"metadata": {"brand": "Brand A", "model": "Alpha"}, "content": "Alpha safety feature evidence."},
+            {"metadata": {"brand": "Brand B", "model": "Beta"}, "content": "Beta safety feature evidence."},
+            {"metadata": {"brand": "Brand C", "model": "Gamma"}, "content": "Gamma safety feature evidence."},
+        ]
+
+        answer = RAGService._compare_from_brochures(
+            "Compare all brochure vehicles by features",
+            chunks,
+        )
+
+        self.assertIn("Brand A Alpha", answer)
+        self.assertIn("Brand B Beta", answer)
+        self.assertIn("Brand C Gamma", answer)
+
+    def test_comparison_chunk_selection_keeps_evidence_from_every_requested_model(self):
+        chunks = [
+            {"metadata": {"model": "Alpha"}, "chunk_index": index}
+            for index in range(5)
+        ] + [
+            {"metadata": {"model": "Beta"}, "chunk_index": index}
+            for index in range(2)
+        ]
+
+        selected = RAGService._balance_comparison_chunks(
+            chunks,
+            ["alpha", "beta"],
+            per_model_limit=2,
+        )
+
+        self.assertEqual(
+            [chunk["metadata"]["model"] for chunk in selected],
+            ["Alpha", "Beta", "Alpha", "Beta"],
+        )
+
+    def test_feature_evidence_does_not_confuse_power_seats_with_powertrain(self):
+        evidence = RAGService._comparison_feature_evidence(
+            "Compare vehicle features",
+            [{
+                "metadata": {"model": "Alpha"},
+                "content": (
+                    "Hyundai Motor India Limited recommends you to avoid using mobile back covers.\n"
+                    "8-Way Power Driver Seat\nFront Seat Side Airbags\nMaximum power 86 PS at 5,500 rpm.\n"
+                    "Remote Engine Start/Stop\nFuel Tank Capacity (l)"
+                ),
+            }],
+        )
+
+        self.assertIn("8-Way Power Driver Seat", evidence["Comfort & convenience"][0])
+        self.assertIn("Front Seat Side Airbags", evidence["Safety"][0])
+        self.assertIn("Maximum power 86 PS", evidence["Powertrain"][0])
+        self.assertNotIn("Hyundai Motor India", " ".join(evidence["Powertrain"]))
+        self.assertIn("Remote Engine Start/Stop", evidence["Technology"][0])
+        self.assertNotIn("Fuel Tank Capacity", " ".join(
+            fact for facts in evidence.values() for fact in facts
+        ))
+
     def test_space_recommendation_uses_dimensions_when_boot_is_missing(self):
         chunks = [
             {

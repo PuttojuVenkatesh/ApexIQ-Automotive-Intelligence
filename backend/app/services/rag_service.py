@@ -39,7 +39,7 @@ class RAGService:
                 "session_id": session_id,
                 "query": user_query,
                 "answer": cached["answer"],
-                "sources": [],
+                "sources": cached["sources"],
                 "related_vehicles": cached["related_vehicles"],
                 "chunks_retrieved": cached["chunks_retrieved"]
             }
@@ -51,14 +51,32 @@ class RAGService:
         query_vector = embedding_service.get_embedding(retrieval_query)
 
         # 2. Vector retrieval
-        candidate_count = max(self.top_k, min(len(db.local_chunks) or 40, 100))
-        matched_chunks = db.match_document_chunks(
+        candidate_count = max(self.top_k, min(len(db.local_chunks) or 100, 500))
+        retrieval_candidates = db.match_document_chunks(
             query_embedding=query_vector,
             match_threshold=0.05,
             match_count=candidate_count,
             filter_vehicle_id=filter_vehicle_id
         )
-        matched_chunks = self._rerank_chunks(retrieval_query, matched_chunks)[:self.top_k]
+        ranked_chunks = self._rerank_chunks(retrieval_query, retrieval_candidates)
+        requested_models = self._models_in_question(
+            retrieval_query,
+            db.local_chunks + ranked_chunks,
+        )
+        comparison_intent = bool(re.search(
+            r"\b(compare|comparison|versus|vs|which one|better|best|recommend|differences?)\b",
+            retrieval_query.lower(),
+        ))
+        if comparison_intent and len(requested_models) >= 2:
+            total_comparison_chunks = min(24, max(self.top_k, 6 * len(requested_models)))
+            per_model_limit = max(1, total_comparison_chunks // len(requested_models))
+            matched_chunks = self._balance_comparison_chunks(
+                ranked_chunks,
+                requested_models,
+                per_model_limit,
+            )
+        else:
+            matched_chunks = ranked_chunks[:self.top_k]
 
         # 3. Format sources and context
         sources = []
@@ -124,12 +142,13 @@ class RAGService:
             "session_id": session_id,
             "query": user_query,
             "answer": answer,
-            "sources": [],
+            "sources": sources,
             "related_vehicles": related_vehicles,
             "chunks_retrieved": len(matched_chunks)
         }
         self._answer_cache[cache_key] = {
             "answer": answer,
+            "sources": sources,
             "related_vehicles": related_vehicles,
             "chunks_retrieved": len(matched_chunks)
         }
@@ -155,6 +174,50 @@ class RAGService:
                 })
                 seen.add(vehicle_id)
         return related
+
+    @staticmethod
+    def _all_models_requested(query: str) -> bool:
+        return bool(re.search(
+            r"\b(?:all|every|each)\b.{0,40}\b(?:brochures?|vehicles?|models?|cars?)\b",
+            query.lower(),
+        ))
+
+    @staticmethod
+    def _models_in_question(query: str, chunks: List[Dict[str, Any]]) -> List[str]:
+        available_models = list(dict.fromkeys(
+            str(chunk.get("metadata", {}).get("model", "")).strip()
+            for chunk in chunks
+            if chunk.get("metadata", {}).get("model")
+        ))
+        if RAGService._all_models_requested(query):
+            return available_models
+
+        mentioned = [
+            model for model in available_models
+            if re.search(rf"\b{re.escape(model)}\b", query, re.IGNORECASE)
+        ]
+        return sorted(mentioned, key=lambda model: query.lower().find(model.lower()))
+
+    @staticmethod
+    def _balance_comparison_chunks(
+        chunks: List[Dict[str, Any]],
+        models: List[str],
+        per_model_limit: int,
+    ) -> List[Dict[str, Any]]:
+        model_chunks: Dict[str, List[Dict[str, Any]]] = {
+            model.lower(): [] for model in models
+        }
+        for chunk in chunks:
+            model = str(chunk.get("metadata", {}).get("model", "")).strip().lower()
+            if model in model_chunks:
+                model_chunks[model].append(chunk)
+
+        balanced = []
+        for index in range(per_model_limit):
+            for model in model_chunks:
+                if index < len(model_chunks[model]):
+                    balanced.append(model_chunks[model][index])
+        return balanced
 
     @staticmethod
     def _conversation_context(query: str, history: List[Dict[str, str]]) -> str:
@@ -202,6 +265,13 @@ class RAGService:
             query_terms.update({"dimensions", "wheelbase", "boot", "space", "seating", "capacity", "luggage"})
         if any(term in query_lower for term in ["safety", "airbag", "adas", "assist"]):
             query_terms.update({"safety", "airbag", "adas", "brake", "stability", "collision"})
+        if re.search(r"\b(features?|equipment|specifications?)\b", query_lower):
+            query_terms.update({
+                "engine", "power", "torque", "transmission", "fuel", "mileage",
+                "safety", "airbag", "adas", "abs", "esc", "sunroof", "ventilated",
+                "seat", "touchscreen", "infotainment", "audio", "connected",
+                "camera", "cruise", "climate", "alloy", "led", "boot",
+            })
         if re.search(r"\b(compare|vs|versus)\b", query_lower):
             query_terms.update({
                 "dimensions", "length", "width", "wheelbase", "boot", "seating",
@@ -301,13 +371,16 @@ class RAGService:
             model for model in available_models
             if re.search(rf"\b{re.escape(model)}\b", effective_question_lower)
         }
+        if self._all_models_requested(effective_question):
+            named_models = available_models
         if len(named_models) >= 2 and is_choice_question:
-            recommendation = self._recommend_from_brochures(
-                effective_question,
-                matched_chunks or [],
-            )
-            if recommendation:
-                return recommendation
+            if len(named_models) == 2:
+                recommendation = self._recommend_from_brochures(
+                    effective_question,
+                    matched_chunks or [],
+                )
+                if recommendation:
+                    return recommendation
             comparison = self._compare_from_brochures(effective_question, matched_chunks or [])
             if comparison:
                 return (
@@ -458,12 +531,16 @@ class RAGService:
     @staticmethod
     def _brochure_model_facts(question: str, chunks: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
         question_lower = question.lower()
+        include_all_models = RAGService._all_models_requested(question)
         models: Dict[str, Dict[str, Any]] = {}
         for chunk in chunks:
             metadata = chunk.get("metadata", {})
             model = str(metadata.get("model", "")).strip()
             brand = str(metadata.get("brand", "")).strip()
-            if model and re.search(rf"\b{re.escape(model.lower())}\b", question_lower):
+            if model and (
+                include_all_models
+                or re.search(rf"\b{re.escape(model.lower())}\b", question_lower)
+            ):
                 entry = models.setdefault(
                     model.lower(),
                     {"name": f"{brand} {model}".strip(), "text": []},
@@ -521,12 +598,201 @@ class RAGService:
         return f"{value:,} mm"
 
     @staticmethod
+    def _comparison_feature_evidence(
+        question: str,
+        chunks: List[Dict[str, Any]],
+    ) -> Dict[str, List[str]]:
+        category_terms = {
+            "Safety": (
+                "safety", "airbag", "abs", "esc", "adas", "braking", "isofix",
+                "camera", "collision", "stability", "seat belt", "seatbelt",
+            ),
+            "Technology": (
+                "touchscreen", "infotainment", "audio", "speaker", "connected",
+                "navigation", "android auto", "apple carplay", "display", "wireless", "usb",
+                "remote vehicle controls", "remote engine start",
+            ),
+            "Comfort & convenience": (
+                "seat", "sunroof", "ventilat", "climate", "air conditioning", "cruise",
+                "keyless", "boot", "space", "recline", "charging", "comfort",
+            ),
+            "Exterior & dimensions": (
+                "length", "width", "height", "wheelbase", "ground clearance",
+                "alloy", "headlamp", "led", "grille", "outside mirror", "orvm", "exterior",
+            ),
+            "Price & warranty": ("price", "cost", "warranty", "inr", "ex-showroom"),
+            "Powertrain": (
+                "engine", "torque", "transmission", "gearbox",
+                "petrol", "diesel", "fuel", "range", "mileage", "hybrid",
+            ),
+        }
+        question_lower = question.lower()
+        selected_categories = [
+            category for category, terms in category_terms.items()
+            if any(term in question_lower for term in terms)
+        ]
+        if not selected_categories or re.search(
+            r"\b(features?|equipment|all|every|each)\b",
+            question_lower,
+        ):
+            selected_categories = list(category_terms)
+
+        evidence_candidates: Dict[str, List[Dict[str, Any]]] = {}
+        for chunk in chunks:
+            metadata = chunk.get("metadata", {})
+            text = re.sub(
+                r"(?m)^\s*(?:Vehicle|Document):[^\n]*(?:\n|$)",
+                "",
+                str(chunk.get("content", "")),
+            ).replace("•", "\n")
+            fragments = []
+            for line in text.replace("|", "\n").splitlines():
+                fragments.extend(re.split(r"(?<=[.!?])\s+|;\s+", line.strip()))
+
+            for fragment in fragments:
+                point = re.sub(r"\s+", " ", fragment).strip(" \t-*")
+                if len(point) < 20:
+                    continue
+                point_lower = point.lower()
+                if re.search(
+                    r"\b(disclaimer|recommends?|advised|please refer|owner'?s manual|"
+                    r"terms and conditions|representation purpose|not be provided|"
+                    r"not a standard|customer needs to purchase|more about the functioning|"
+                    r"depends upon various factors|symphony of|stand above it all|"
+                    r"designed to strike a balance|stay completely connected)\b",
+                    point_lower,
+                ):
+                    continue
+                if (
+                    not re.search(r"\d", point)
+                    and len(point.split()) <= 4
+                    and re.search(r"\b(capacity|transmission|dimensions)\b|power train", point_lower)
+                ):
+                    continue
+
+                def matches_category(name: str, terms: tuple[str, ...]) -> bool:
+                    if name == "Powertrain" and re.search(
+                        r"\bremote\b.{0,40}\b(?:engine|start)\b",
+                        point_lower,
+                    ):
+                        return False
+                    if any(
+                        re.search(rf"\b{re.escape(term)}s?\b", point_lower)
+                        for term in terms
+                        if term != "ventilat"
+                    ):
+                        return True
+                    if name == "Comfort & convenience" and re.search(
+                        r"\bventilat\w*\b",
+                        point_lower,
+                    ):
+                        return True
+                    if name == "Powertrain" and re.search(
+                        r"\bpower\b.{0,40}\b(?:bhp|ps|kw)\b|\b(?:bhp|ps|kw)\b.{0,40}\bpower\b",
+                        point_lower,
+                    ):
+                        return True
+                    motor_spec = (
+                        name == "Powertrain"
+                        and re.search(r"\bmotor\b", point_lower)
+                        and re.search(
+                            r"\b(electric|battery|powertrain|torque|bhp|ps|kw|nm)\b",
+                            point_lower,
+                        )
+                    )
+                    battery_spec = (
+                        name == "Powertrain"
+                        and re.search(r"\bbattery\b", point_lower)
+                        and re.search(
+                            r"\b(electric vehicle|ev|kwh|battery capacity|battery pack)\b",
+                            point_lower,
+                        )
+                    )
+                    return bool(motor_spec or battery_spec)
+
+                category = next(
+                    (
+                        name for name, terms in category_terms.items()
+                        if name in selected_categories
+                        and matches_category(name, terms)
+                    ),
+                    None,
+                )
+                if category is None:
+                    continue
+                if len(point) > 280:
+                    point = point[:277].rsplit(" ", 1)[0].rstrip(" ,;:-") + "..."
+                page = metadata.get("page")
+                if page:
+                    point = f"{point} (brochure p. {page})"
+                candidates = evidence_candidates.setdefault(category, [])
+                point_key = re.sub(
+                    r"\s*\(brochure p\.\s*\d+\)$",
+                    "",
+                    point,
+                    flags=re.IGNORECASE,
+                ).casefold()
+                if all(candidate["key"] != point_key for candidate in candidates):
+                    score = sum(
+                        bool(re.search(rf"\b{re.escape(term)}\b", point_lower))
+                        for term in category_terms[category]
+                        if term != "ventilat"
+                    )
+                    if re.search(r"\d", point):
+                        score += 2
+                    if re.search(r"\b(adas|airbags?|abs|esc|sunroof|touchscreen)\b", point_lower):
+                        score += 2
+                    candidates.append({"score": score, "key": point_key, "point": point})
+
+        return {
+            category: [
+                candidate["point"]
+                for candidate in sorted(candidates, key=lambda candidate: candidate["score"], reverse=True)[:3]
+            ]
+            for category, candidates in evidence_candidates.items()
+        }
+
+    @staticmethod
     def _compare_from_brochures(question: str, chunks: List[Dict[str, Any]]) -> str:
         models = RAGService._brochure_model_facts(question, chunks)
         if len(models) < 2:
             return "I couldn't retrieve comparable brochure specifications for both models."
-        first, second = list(models.values())[:2]
+        evidence_by_model = {
+            model: RAGService._comparison_feature_evidence(
+                question,
+                [
+                    chunk for chunk in chunks
+                    if str(chunk.get("metadata", {}).get("model", "")).strip().lower() == model
+                ],
+            )
+            for model in models
+        }
         response = []
+        categories = list(dict.fromkeys(
+            category
+            for evidence in evidence_by_model.values()
+            for category in evidence
+        ))
+        for category in categories:
+            category_rows = []
+            for model, details in models.items():
+                facts = evidence_by_model[model].get(category, [])
+                if facts:
+                    category_rows.append(
+                        f"- **{details['name']}:** {'; '.join(facts)}"
+                    )
+            if category_rows:
+                response.extend([f"### {category}", *category_rows])
+
+        if len(models) > 2:
+            if not response:
+                return "The retrieved brochure passages don't contain feature details for these models."
+            response.append(
+                "Feature availability can vary by trim; these points reflect only the retrieved brochure passages."
+            )
+            return "\n".join(response)
+
+        first, second = list(models.values())[:2]
         shared_dimensions = [
             field for field in ("length", "width", "wheelbase")
             if field in first["dimensions"] and field in second["dimensions"]
@@ -586,7 +852,10 @@ class RAGService:
             ])
 
         if not response:
-            return "The retrieved brochure passages don't contain comparable specifications for these models."
+            return "The retrieved brochure passages don't contain feature details for these models."
+        response.append(
+            "Feature availability can vary by trim; these points reflect only the retrieved brochure passages."
+        )
         return "\n".join(response)
 
     @staticmethod

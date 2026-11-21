@@ -8,6 +8,11 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 load_dotenv(BASE_DIR / "admin.env")
 load_dotenv(BASE_DIR / ".env")
 
+def _configured_path(name: str, default: Path) -> Path:
+    path = Path(os.getenv(name, str(default)))
+    return path if path.is_absolute() else (BASE_DIR / path).resolve()
+
+
 class Settings(BaseModel):
     # App Settings
     APP_NAME: str = "Automotive AI Assistant"
@@ -15,14 +20,20 @@ class Settings(BaseModel):
     
     # Directories
     BASE_DIR: Path = BASE_DIR
-    BROCHURES_DIR: Path = Path(os.getenv("BROCHURES_DIR", BASE_DIR.parent / "brochures"))
-    UPLOAD_DIR: Path = Path(os.getenv("UPLOAD_DIR", BASE_DIR / "uploads"))
+    BROCHURES_DIR: Path = _configured_path("BROCHURES_DIR", BASE_DIR.parent / "brochures")
+    UPLOAD_DIR: Path = _configured_path("UPLOAD_DIR", BASE_DIR / "uploads")
     ADMIN_USERNAME: str = os.getenv("ADMIN_USERNAME", "")
     ADMIN_PASSWORD: str = os.getenv("ADMIN_PASSWORD", "")
+    CORS_ORIGINS: list[str] = [
+        origin.strip()
+        for origin in os.getenv("CORS_ORIGINS", "*").split(",")
+        if origin.strip()
+    ]
     
     # Supabase Settings
     SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
     SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "")
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "")
     
     # LLM Settings: "gemini", "openai", or "mock"
     LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "gemini").lower()
